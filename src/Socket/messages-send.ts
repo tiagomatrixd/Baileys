@@ -588,7 +588,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 					await sendNode(stanza)
 				}
-		)
+			})
 
 		return msgId
 	}
