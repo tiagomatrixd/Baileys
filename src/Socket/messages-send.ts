@@ -35,8 +35,39 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 	const userDevicesCache = config.userDevicesCache || new NodeCache({
 		stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, // 5 minutes
-		useClones: false
+		useClones: false,
+		checkperiod: 60, // Check for expired items every 60 seconds
 	})
+
+	const pendingDeviceFetches = new Map<string, Promise<JidWithDevice[]>>()
+
+	const deviceFetchRateLimiter = {
+		lastFetch: 0,
+		queue: [] as (() => void)[],
+		maxRequestsPerSecond: 5,
+
+		async throttle() {
+			const now = Date.now()
+			const timeSinceLastFetch = now - this.lastFetch
+			const minInterval = 1000 / this.maxRequestsPerSecond
+
+			if (timeSinceLastFetch < minInterval) {
+				return new Promise<void>(resolve => {
+					this.queue.push(resolve)
+					setTimeout(() => {
+						const callback = this.queue.shift()
+						if (callback) {
+							this.lastFetch = Date.now()
+							callback()
+						}
+					}, minInterval - timeSinceLastFetch)
+				})
+			}
+
+			this.lastFetch = now
+			return Promise.resolve()
+		}
+	}
 
 	let mediaConn: Promise<MediaConnInfo>
 	const refreshMediaConn = async(forceGet = false) => {
@@ -145,6 +176,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		const toFetch: string[] = []
+		const pendingFetches: Promise<void>[] = []
 		jids = Array.from(new Set(jids))
 
 		for(let jid of jids) {
@@ -153,8 +185,32 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			if(useCache) {
 				const devices = userDevicesCache.get<JidWithDevice[]>(user!)
 				if(devices) {
-					deviceResults.push(...devices)
+					const ttl = userDevicesCache.getTtl(user!)
+					if (ttl && (ttl - Date.now()) < 30000) {
+						pendingFetches.push((async () => {
+							try {
+								await deviceFetchRateLimiter.throttle()
+								logger.debug({ user }, 'refreshing device cache in background')
+								const key = `fetch_${user}`
+								if (!pendingDeviceFetches.has(key)) {
+									const fetchPromise = fetchDevicesForUser(jid)
+									pendingDeviceFetches.set(key, fetchPromise)
+									try {
+										const refreshedDevices = await fetchPromise
+										if (refreshedDevices.length) {
+											userDevicesCache.set(user!, refreshedDevices)
+										}
+									} finally {
+										pendingDeviceFetches.delete(key)
+									}
+								}
+							} catch (error) {
+								logger.warn({ user, error }, 'error refreshing device cache')
+							}
+						})())
+					}
 
+					deviceResults.push(...devices)
 					logger.trace({ user }, 'using cache for devices')
 				} else {
 					toFetch.push(jid)
@@ -164,10 +220,37 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 		}
 
+		if (pendingFetches.length) {
+			Promise.all(pendingFetches).catch(err => 
+				logger.warn({ error: err }, 'background device fetch error')
+			)
+		}
+
 		if(!toFetch.length) {
 			return deviceResults
 		}
 
+		const key = `fetch_${toFetch.join(',')}`
+		if (pendingDeviceFetches.has(key)) {
+			const devices = await pendingDeviceFetches.get(key)!
+			return [...deviceResults, ...devices]
+		}
+
+		await deviceFetchRateLimiter.throttle()
+
+		const fetchPromise = fetchDevicesForJids(toFetch, ignoreZeroDevices)
+		pendingDeviceFetches.set(key, fetchPromise)
+
+		try {
+			const devices = await fetchPromise
+			deviceResults.push(...devices)
+			return deviceResults
+		} finally {
+			pendingDeviceFetches.delete(key)
+		}
+	}
+
+	const fetchDevicesForJids = async(jids: string[], ignoreZeroDevices: boolean) => {
 		const query = new USyncQuery()
 			.withContext('message')
 			.withDeviceProtocol()
@@ -185,16 +268,20 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			for(const item of extracted) {
 				deviceMap[item.user] = deviceMap[item.user] || []
 				deviceMap[item.user].push(item)
-
-				deviceResults.push(item)
 			}
 
 			for(const key in deviceMap) {
 				userDevicesCache.set(key, deviceMap[key])
 			}
+
+			return extracted
 		}
 
-		return deviceResults
+		return []
+	}
+
+	const fetchDevicesForUser = async(jid: string) => {
+		return fetchDevicesForJids([jid], false)
 	}
 
 	const assertSessions = async(jids: string[], force: boolean) => {
@@ -250,7 +337,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 	const sendPeerDataOperationMessage = async(
 		pdoMessage: proto.Message.IPeerDataOperationRequestMessage
 	): Promise<string> => {
-		//TODO: for later, abstract the logic to send a Peer Message instead of just PDO - useful for App State Key Resync with phone
 		if(!authState.creds.me?.id) {
 			throw new Boom('Not authenticated')
 		}
@@ -267,7 +353,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const msgId = await relayMessage(meJid, protocolMessage, {
 			additionalAttributes: {
 				category: 'peer',
-				// eslint-disable-next-line camelcase
 				push_priority: 'high_force',
 			},
 		})
@@ -356,9 +441,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const extraAttrs = {}
 
 		if(participant) {
-			// when the retry request is not for a group
-			// only send to the specific device that asked for a retry
-			// otherwise the message is sent out to every device that should be a recipient
 			if(!isGroup && !isStatus) {
 				additionalAttributes = { ...additionalAttributes, 'device_fanout': 'false' }
 			}
@@ -392,8 +474,18 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						})(),
 						(async() => {
 							if(!participant && !isStatus) {
-								const result = await authState.keys.get('sender-key-memory', [jid])
-								return result[jid] || { }
+								try {
+									const result = await authState.keys.get('sender-key-memory', [jid])
+									const skMap = result[jid] || {}
+									if (typeof skMap !== 'object') {
+										logger.warn({ jid }, 'corrupted sender-key-memory, resetting')
+										return {}
+									}
+									return skMap
+								} catch (error) {
+									logger.warn({ jid, error }, 'failed to get sender-key-memory, resetting')
+									return {}
+								}
 							}
 
 							return { }
@@ -406,8 +498,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 							participantsList.push(...statusJidList)
 						}
 
-						const additionalDevices = await getUSyncDevices(participantsList, !!useUserDevicesCache, false)
-						devices.push(...additionalDevices)
+						try {
+							const additionalDevices = await getUSyncDevices(participantsList, !!useUserDevicesCache, false)
+							devices.push(...additionalDevices)
+						} catch (error) {
+							logger.warn({ error }, 'error fetching devices, using cached data if available')
+						}
 					}
 
 					const patched = await patchMessageBeforeSending(message)
@@ -418,52 +514,90 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 					const bytes = encodeWAMessage(patched)
 
-					const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage(
-						{
-							group: destinationJid,
-							data: bytes,
-							meId,
-						}
-					)
+					let retryCount = 0
+					const maxRetries = 2
+					let lastError: Error | undefined
 
-					const senderKeyJids: string[] = []
-					// ensure a connection is established with every device
-					for(const { user, device } of devices) {
-						const jid = jidEncode(user, isLid ? 'lid' : 's.whatsapp.net', device)
-						if(!senderKeyMap[jid] || !!participant) {
-							senderKeyJids.push(jid)
-							// store that this person has had the sender keys sent to them
-							senderKeyMap[jid] = true
-						}
-					}
+					while (retryCount <= maxRetries) {
+						try {
+							const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage(
+								{
+									group: destinationJid,
+									data: bytes,
+									meId,
+								}
+							)
 
-					// if there are some participants with whom the session has not been established
-					// if there are, we re-send the senderkey
-					if(senderKeyJids.length) {
-						logger.debug({ senderKeyJids }, 'sending new sender key')
+							const senderKeyJids: string[] = []
+							const devicesNeedingUpdate = new Set<string>()
 
-						const senderKeyMsg: proto.IMessage = {
-							senderKeyDistributionMessage: {
-								axolotlSenderKeyDistributionMessage: senderKeyDistributionMessage,
-								groupId: destinationJid
+							for(const { user, device } of devices) {
+								const jid = jidEncode(user, isLid ? 'lid' : 's.whatsapp.net', device)
+								if(!senderKeyMap[jid] || !!participant || retryCount > 0) {
+									senderKeyJids.push(jid)
+									devicesNeedingUpdate.add(jid)
+								}
 							}
+
+							if(senderKeyJids.length) {
+								logger.debug({ senderKeyJids, retryAttempt: retryCount }, 'sending sender key')
+
+								const senderKeyMsg: proto.IMessage = {
+									senderKeyDistributionMessage: {
+										axolotlSenderKeyDistributionMessage: senderKeyDistributionMessage,
+										groupId: destinationJid
+									}
+								}
+
+								try {
+									await assertSessions(senderKeyJids, retryCount > 0)
+								} catch (error) {
+									logger.warn({ error }, 'failed to assert sessions for sender key distribution')
+									if (retryCount === maxRetries) {
+										throw error
+									}
+									lastError = error
+									retryCount++
+									continue
+								}
+
+								const result = await createParticipantNodes(senderKeyJids, senderKeyMsg, extraAttrs)
+								shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
+
+								participants.push(...result.nodes)
+
+								for (const jid of devicesNeedingUpdate) {
+									senderKeyMap[jid] = true
+								}
+							}
+
+							binaryNodeContent.push({
+								tag: 'enc',
+								attrs: { v: '2', type: 'skmsg' },
+								content: ciphertext
+							})
+
+							try {
+								await authState.keys.set({ 'sender-key-memory': { [jid]: senderKeyMap } })
+							} catch (error) {
+								logger.warn({ error }, 'failed to save sender-key-memory')
+							}
+
+							break
+						} catch (error) {
+							logger.warn({ error, retryCount }, 'error in group message encryption')
+							if (retryCount === maxRetries) {
+								throw error
+							}
+							lastError = error
+							retryCount++
+							await new Promise(resolve => setTimeout(resolve, 200 * retryCount))
 						}
-
-						await assertSessions(senderKeyJids, false)
-
-						const result = await createParticipantNodes(senderKeyJids, senderKeyMsg, extraAttrs)
-						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
-
-						participants.push(...result.nodes)
 					}
 
-					binaryNodeContent.push({
-						tag: 'enc',
-						attrs: { v: '2', type: 'skmsg' },
-						content: ciphertext
-					})
-
-					await authState.keys.set({ 'sender-key-memory': { [jid]: senderKeyMap } })
+					if (lastError && retryCount > maxRetries) {
+						throw lastError
+					}
 				} else {
 					const { user: meUser } = jidDecode(meId)!
 
@@ -474,8 +608,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						}
 
 						if(additionalAttributes?.['category'] !== 'peer') {
-							const additionalDevices = await getUSyncDevices([ meId, jid ], !!useUserDevicesCache, true)
-							devices.push(...additionalDevices)
+							try {
+								const additionalDevices = await getUSyncDevices([ meId, jid ], !!useUserDevicesCache, true)
+								devices.push(...additionalDevices)
+							} catch (error) {
+								logger.warn({ error }, 'error fetching devices for direct message')
+							}
 						}
 					}
 
@@ -494,26 +632,31 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						allJids.push(jid)
 					}
 
-					await assertSessions(allJids, false)
+					try {
+						await assertSessions(allJids, false)
 
-					const [
-						{ nodes: meNodes, shouldIncludeDeviceIdentity: s1 },
-						{ nodes: otherNodes, shouldIncludeDeviceIdentity: s2 }
-					] = await Promise.all([
-						createParticipantNodes(meJids, meMsg, extraAttrs),
-						createParticipantNodes(otherJids, message, extraAttrs)
-					])
-					participants.push(...meNodes)
-					participants.push(...otherNodes)
+						const [
+							{ nodes: meNodes, shouldIncludeDeviceIdentity: s1 },
+							{ nodes: otherNodes, shouldIncludeDeviceIdentity: s2 }
+						] = await Promise.all([
+							createParticipantNodes(meJids, meMsg, extraAttrs),
+							createParticipantNodes(otherJids, message, extraAttrs)
+						])
+						participants.push(...meNodes)
+						participants.push(...otherNodes)
 
-					shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || s1 || s2
+						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || s1 || s2
+					} catch (error) {
+						logger.error({ error }, 'failed to create participant nodes')
+						throw error
+					}
 				}
 
 				if(participants.length) {
 					if(additionalAttributes?.['category'] === 'peer') {
 						const peerNode = participants[0]?.content?.[0] as BinaryNode
 						if(peerNode) {
-							binaryNodeContent.push(peerNode) // push only enc
+							binaryNodeContent.push(peerNode)
 						}
 					} else {
 						binaryNodeContent.push({
@@ -533,9 +676,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					},
 					content: binaryNodeContent
 				}
-				// if the participant to send to is explicitly specified (generally retry recp)
-				// ensure the message is only sent to that person
-				// if a retry receipt is sent to everyone -- it'll fail decryption for everyone else who received the msg
+
 				if(participant) {
 					if(isJidGroup(destinationJid)) {
 						stanza.attrs.to = destinationJid
@@ -566,13 +707,23 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				logger.debug({ msgId }, `sending message to ${participants.length} devices`)
 
-				await sendNode(stanza)
+				const timeoutMs = 15000
+				try {
+					await Promise.race([
+						sendNode(stanza),
+						new Promise((_, reject) => 
+							setTimeout(() => reject(new Boom('Message sending timed out', { statusCode: 408 })), timeoutMs)
+						)
+					])
+				} catch (error) {
+					logger.error({ error, msgId }, 'error sending message')
+					throw error
+				}
 			}
 		)
 
 		return msgId
 	}
-
 
 	const getMessageType = (message: proto.IMessage) => {
 		if(message.pollCreationMessage || message.pollCreationMessageV2 || message.pollCreationMessageV3) {
@@ -664,6 +815,23 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		sendPeerDataOperationMessage,
 		createParticipantNodes,
 		getUSyncDevices,
+		validateSenderKeyMemory: async(groupJid: string) => {
+			try {
+				const result = await authState.keys.get('sender-key-memory', [groupJid])
+				const senderKeyMap = result[groupJid] || {}
+
+				if (typeof senderKeyMap !== 'object') {
+					logger.warn({ groupJid }, 'corrupted sender-key-memory, resetting')
+					await authState.keys.set({ 'sender-key-memory': { [groupJid]: {} } })
+					return false
+				}
+
+				return true
+			} catch (error) {
+				logger.warn({ groupJid, error }, 'error validating sender-key-memory')
+				return false
+			}
+		},
 		updateMediaMessage: async(message: proto.IWebMessageInfo) => {
 			const content = assertMediaContent(message.message)
 			const mediaKey = content.mediaKey!
@@ -753,7 +921,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 									: undefined
 							},
 						),
-						//TODO: CACHE
 						getProfilePicUrl: sock.profilePictureUrl,
 						upload: waUploadToServer,
 						mediaCache: config.mediaCache,
@@ -768,9 +935,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				const isPollMessage = 'poll' in content && !!content.poll
 				const additionalAttributes: BinaryNodeAttributes = { }
 				const additionalNodes: BinaryNode[] = []
-				// required for delete
 				if(isDeleteMsg) {
-					// if the chat is a group, and I am not the author, then delete the message as an admin
 					if(isJidGroup(content.delete?.remoteJid as string) && !content.delete?.fromMe) {
 						additionalAttributes.edit = '8'
 					} else {
