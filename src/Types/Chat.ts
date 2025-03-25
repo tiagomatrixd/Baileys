@@ -31,11 +31,6 @@ export interface PresenceData {
     lastSeen?: number
 }
 
-export type BotListInfo = {
-  jid: string
-  personaId: string
-}
-
 export type ChatMutation = {
     syncAction: proto.ISyncActionData
     index: string[]

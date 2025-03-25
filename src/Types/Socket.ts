@@ -23,8 +23,6 @@ export type CacheStore = {
     flushAll(): void
 }
 
-export type PatchedMessageWithRecipientJID = proto.IMessage & {recipientJid?: string}
-
 export type SocketConfig = {
     /** the WS url to connect to WA */
     waWebSocketUrl: string | URL
@@ -48,10 +46,8 @@ export type SocketConfig = {
     browser: WABrowserDescription
     /** agent used for fetch requests -- uploading/downloading media */
     fetchAgent?: Agent
-    /** should the QR be printed in the terminal
-    * @deprecated This feature has been removed
-    */
-    printQRInTerminal?: boolean
+    /** should the QR be printed in the terminal */
+    printQRInTerminal: boolean
     /** should events be emitted for actions done by this socket connection */
     emitOwnEvents: boolean
     /** custom upload hosts to upload media to */
@@ -108,8 +104,8 @@ export type SocketConfig = {
      * */
     patchMessageBeforeSending: (
         msg: proto.IMessage,
-        recipientJids?: string[],
-    ) => Promise<PatchedMessageWithRecipientJID[] | PatchedMessageWithRecipientJID> | PatchedMessageWithRecipientJID[] | PatchedMessageWithRecipientJID
+        recipientJids: string[],
+    ) => Promise<proto.IMessage> | proto.IMessage
 
     /** verify app state MACs */
     appStateMacVerification: {
