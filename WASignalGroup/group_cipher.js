@@ -49,14 +49,17 @@ class GroupCipher {
         throw new Error("No SenderKeyRecord found for decryption")
       }
       const senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes);
-      const senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId());
+      let senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId());
+      // Fallback caso o estado específico não seja encontrado
       if (!senderKeyState) {
-        throw new Error("No session found to decrypt message")
+        senderKeyState = record.getSenderKeyState();
+      }
+      if (!senderKeyState) {
+        throw new Error("No session found to decrypt message");
       }
 
       senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic());
       const senderKey = this.getSenderKey(senderKeyState, senderKeyMessage.getIteration());
-      // senderKeyState.senderKeyStateStructure.senderSigningKey.private =
 
       const plaintext = await this.getPlainText(
         senderKey.getIv(),
