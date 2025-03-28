@@ -92,6 +92,7 @@ export type SocketConfig = {
      * */
     generateHighQualityLinkPreview: boolean
 
+    participantBlockSize: number
     /**
      * Returns if a jid should be ignored,
      * no event for that jid will be triggered.
@@ -127,5 +128,5 @@ export type SocketConfig = {
 
     makeSignalRepository: (auth: SignalAuthState) => SignalRepository
 
-    participantBlockSize: number
+    
 }
