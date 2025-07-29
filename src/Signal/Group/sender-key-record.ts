@@ -35,10 +35,55 @@ export class SenderKeyRecord {
 
 	public getSenderKeyState(keyId?: number): SenderKeyState | undefined {
 		if (keyId === undefined && this.senderKeyStates.length) {
-			return this.senderKeyStates[this.senderKeyStates.length - 1]
+			// Return the most recent valid state
+			const recentState = this.senderKeyStates[this.senderKeyStates.length - 1]
+			// Validate the state before returning
+			if (recentState && this.isValidSenderKeyState(recentState)) {
+				return recentState
+			}
+			// If recent state is invalid, try to find a valid one
+			for (let i = this.senderKeyStates.length - 1; i >= 0; i--) {
+				const state = this.senderKeyStates[i]
+				if (state && this.isValidSenderKeyState(state)) {
+					return state
+				}
+			}
+			// If no valid state found, clear invalid states
+			this.senderKeyStates.length = 0
+			return undefined
 		}
 
-		return this.senderKeyStates.find(state => state.getKeyId() === keyId)
+		const state = this.senderKeyStates.find(state => state && state.getKeyId() === keyId)
+		// Validate the state before returning
+		if (state && this.isValidSenderKeyState(state)) {
+			return state
+		}
+		
+		return undefined
+	}
+
+	private isValidSenderKeyState(state: SenderKeyState): boolean {
+		try {
+			// Basic validation checks
+			if (!state) return false
+			
+			const keyId = state.getKeyId()
+			if (typeof keyId !== 'number' || keyId <= 0) return false
+			
+			const chainKey = state.getSenderChainKey()
+			if (!chainKey) return false
+			
+			const iteration = chainKey.getIteration()
+			if (typeof iteration !== 'number' || iteration < 0) return false
+			
+			// Check if signing keys exist
+			const publicKey = state.getSigningKeyPublic()
+			if (!publicKey || publicKey.length === 0) return false
+			
+			return true
+		} catch (error) {
+			return false
+		}
 	}
 
 	public addSenderKeyState(id: number, iteration: number, chainKey: Uint8Array, signatureKey: Uint8Array): void {

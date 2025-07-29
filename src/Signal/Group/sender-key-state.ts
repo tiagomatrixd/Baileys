@@ -121,6 +121,9 @@ export class SenderKeyState {
 	}
 
 	public addSenderMessageKey(senderMessageKey: SenderMessageKey): void {
+		// Clean up old/invalid message keys before adding new one
+		this.cleanupOldMessageKeys()
+		
 		this.senderKeyStateStructure.senderMessageKeys.push({
 			iteration: senderMessageKey.getIteration(),
 			seed: senderMessageKey.getSeed()
@@ -129,6 +132,27 @@ export class SenderKeyState {
 		if (this.senderKeyStateStructure.senderMessageKeys.length > this.MAX_MESSAGE_KEYS) {
 			this.senderKeyStateStructure.senderMessageKeys.shift()
 		}
+	}
+
+	private cleanupOldMessageKeys(): void {
+		// Remove duplicate iterations and keep only unique ones
+		const seenIterations = new Set<number>()
+		this.senderKeyStateStructure.senderMessageKeys = this.senderKeyStateStructure.senderMessageKeys.filter(key => {
+			if (seenIterations.has(key.iteration)) {
+				return false // Remove duplicate
+			}
+			seenIterations.add(key.iteration)
+			return true
+		})
+		
+		// Sort by iteration to maintain order
+		this.senderKeyStateStructure.senderMessageKeys.sort((a, b) => a.iteration - b.iteration)
+		
+		// Remove keys that are too old (more than 1000 iterations behind current)
+		const currentIteration = this.getSenderChainKey().getIteration()
+		this.senderKeyStateStructure.senderMessageKeys = this.senderKeyStateStructure.senderMessageKeys.filter(key => {
+			return (currentIteration - key.iteration) <= 1000
+		})
 	}
 
 	public removeSenderMessageKey(iteration: number): SenderMessageKey | null {

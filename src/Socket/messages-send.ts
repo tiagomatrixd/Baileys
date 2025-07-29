@@ -461,8 +461,23 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					})(),
 					(async () => {
 						if (!participant && !isStatus) {
-							const result = await authState.keys.get('sender-key-memory', [jid])
-							return result[jid] || {}
+							try {
+								const result = await authState.keys.get('sender-key-memory', [jid])
+								const memory = result[jid] || {}
+								
+								// Validate and clean the memory entries
+								const cleanedMemory: { [jid: string]: boolean } = {}
+								for (const [key, value] of Object.entries(memory)) {
+									if (typeof value === 'boolean' && value === true) {
+										cleanedMemory[key] = value
+									}
+								}
+								
+								return cleanedMemory
+							} catch (error) {
+								logger.warn({ error, jid }, 'failed to load sender key memory, starting fresh')
+								return {}
+							}
 						}
 
 						return {}
@@ -537,7 +552,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: ciphertext
 				})
 
-				await authState.keys.set({ 'sender-key-memory': { [jid]: senderKeyMap } })
+				// Store sender key memory with validation and cleanup
+				try {
+					// Clean up invalid entries in sender key memory
+					const cleanedSenderKeyMap: { [jid: string]: boolean } = {}
+					for (const [jidKey, value] of Object.entries(senderKeyMap)) {
+						if (typeof value === 'boolean' && value === true) {
+							cleanedSenderKeyMap[jidKey] = value
+						}
+					}
+					
+					await authState.keys.set({ 'sender-key-memory': { [jid]: cleanedSenderKeyMap } })
+				} catch (error) {
+					logger.warn({ error, jid }, 'failed to store sender key memory, will retry on next message')
+					// Don't fail the message send if we can't store the memory
+				}
 			} else {
 				const { user: meUser } = jidDecode(meId)!
 

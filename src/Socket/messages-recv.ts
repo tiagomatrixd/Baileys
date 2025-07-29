@@ -606,7 +606,21 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		await assertSessions([participant], true)
 
 		if (isJidGroup(remoteJid)) {
+			// Clear sender key memory for the group to force regeneration of sender keys
+			// This ensures all participants get fresh keys
+			logger.debug({ remoteJid }, 'clearing sender key memory for group retry')
 			await authState.keys.set({ 'sender-key-memory': { [remoteJid]: null } })
+			
+			// Also clear any corrupted sender keys for this group
+			try {
+				const groupSenderKeys = await authState.keys.get('sender-key', [remoteJid])
+				if (groupSenderKeys[remoteJid]) {
+					logger.debug({ remoteJid }, 'clearing potentially corrupted sender key for group')
+					await authState.keys.set({ 'sender-key': { [remoteJid]: null } })
+				}
+			} catch (error) {
+				logger.warn({ error, remoteJid }, 'failed to clear sender key, continuing with retry')
+			}
 		}
 
 		logger.debug({ participant, sendToAll }, 'forced new session for retry recp')
