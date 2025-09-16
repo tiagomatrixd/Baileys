@@ -158,11 +158,12 @@ export const prepareWAMessageMedia = async(
 	const requiresOriginalForSomeProcessing = requiresDurationComputation || requiresThumbnailComputation
 	const {
 		mediaKey,
-		encFilePath,
-		originalFilePath,
+		encWriteStream,
+		bodyPath,
 		fileEncSha256,
 		fileSha256,
-		fileLength
+		fileLength,
+		didSaveToTmpPath
 	} = await encryptedStream(
 		uploadData.media,
 		options.mediaTypeOverride || mediaType,
@@ -177,7 +178,7 @@ export const prepareWAMessageMedia = async(
 	const [{ mediaUrl, directPath }] = await Promise.all([
 		(async() => {
 			const result = await options.upload(
-				encFilePath,
+				encWriteStream,
 				{ fileEncSha256B64, mediaType, timeoutMs: options.mediaUploadTimeoutMs }
 			)
 			logger?.debug({ mediaType, cacheableKey }, 'uploaded media')
@@ -189,7 +190,7 @@ export const prepareWAMessageMedia = async(
 					const {
 						thumbnail,
 						originalImageDimensions
-					} = await generateThumbnail(originalFilePath!, mediaType as 'image' | 'video', options)
+					} = await generateThumbnail(bodyPath!, mediaType as 'image' | 'video', options)
 					uploadData.jpegThumbnail = thumbnail
 					if(!uploadData.width && originalImageDimensions) {
 						uploadData.width = originalImageDimensions.width
@@ -201,12 +202,12 @@ export const prepareWAMessageMedia = async(
 				}
 
 				if(requiresDurationComputation) {
-					uploadData.seconds = await getAudioDuration(originalFilePath!)
+					uploadData.seconds = await getAudioDuration(bodyPath!)
 					logger?.debug('computed audio duration')
 				}
 
 				if(requiresWaveformProcessing) {
-					uploadData.waveform = await getAudioWaveform(originalFilePath!, logger)
+					uploadData.waveform = await getAudioWaveform(bodyPath!, logger)
 					logger?.debug('processed waveform')
 				}
 
@@ -221,15 +222,16 @@ export const prepareWAMessageMedia = async(
 	])
 		.finally(
 			async() => {
-				try {
-					await fs.unlink(encFilePath)
-					if(originalFilePath) {
-						await fs.unlink(originalFilePath)
+				encWriteStream.destroy()
+				// remove tmp files
+				if(didSaveToTmpPath && bodyPath) {
+					try {
+						await fs.access(bodyPath)
+						await fs.unlink(bodyPath)
+						logger?.debug('removed tmp file')
+					} catch(error) {
+						logger?.warn('failed to remove tmp file')
 					}
-
-					logger?.debug('removed tmp files')
-				} catch(error) {
-					logger?.warn('failed to remove tmp file')
 				}
 			}
 		)
