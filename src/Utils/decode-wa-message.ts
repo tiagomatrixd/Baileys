@@ -100,7 +100,8 @@ export function decodeMessageNode(
 		senderLid: stanza?.attrs?.sender_lid,
 		senderPn: stanza?.attrs?.sender_pn,
 		participant,
-		participantLid: stanza?.attrs?.participant_lid
+		participantLid: stanza?.attrs?.participant_lid,
+		participantPn: stanza?.attrs?.participant_pn,
 	}
 
 	const fullMessage: WAMessage = {
