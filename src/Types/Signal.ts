@@ -1,4 +1,4 @@
-import { proto } from '../../WAProto/index.js'
+import { proto } from '../../WAProto'
 
 type DecryptGroupSignalOpts = {
 	group: string

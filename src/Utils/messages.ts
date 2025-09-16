@@ -3,9 +3,9 @@ import axios from 'axios'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
 import { type Transform } from 'stream'
-import { proto } from '../../WAProto/index.js'
+import { proto } from '../../WAProto'
 import { MEDIA_KEYS, URL_REGEX, WA_DEFAULT_EPHEMERAL } from '../Defaults'
-import type {
+import {
 	AnyMediaMessageContent,
 	AnyMessageContent,
 	DownloadableMessage,
@@ -13,18 +13,19 @@ import type {
 	MessageContentGenerationOptions,
 	MessageGenerationOptions,
 	MessageGenerationOptionsFromContent,
+	MessageType,
 	MessageUserReceipt,
-	MessageWithContextInfo,
 	WAMediaUpload,
 	WAMessage,
 	WAMessageContent,
+	WAMessageStatus,
+	WAProto,
 	WATextMessage
 } from '../Types'
-import { WAMessageStatus, WAProto } from '../Types'
 import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
 import { sha256 } from './crypto'
 import { generateMessageIDV2, getKeyAuthor, unixTimestampSeconds } from './generics'
-import type { ILogger } from './logger'
+import { ILogger } from './logger'
 import {
 	downloadContentFromMessage,
 	encryptedStream,
@@ -32,7 +33,7 @@ import {
 	getAudioDuration,
 	getAudioWaveform,
 	getRawMediaUploadData,
-	type MediaDownloadOptions
+	MediaDownloadOptions
 } from './messages-media'
 
 type MediaUploadData = {
@@ -85,14 +86,14 @@ export const generateLinkPreviewIfRequired = async (
 		try {
 			const urlInfo = await getUrlInfo(url)
 			return urlInfo
-		} catch (error: any) {
+		} catch (error) {
 			// ignore if fails
 			logger?.warn({ trace: error.stack }, 'url generation failed')
 		}
 	}
 }
 
-const assertColor = async (color: any) => {
+const assertColor = async color => {
 	let assertedColor
 	if (typeof color === 'number') {
 		assertedColor = color > 0 ? color : 0xffffffff + Number(color) + 1
@@ -126,10 +127,10 @@ export const prepareWAMessageMedia = async (
 
 	const uploadData: MediaUploadData = {
 		...message,
-		media: (message as any)[mediaType]
+		media: message[mediaType]
 	}
-	delete (uploadData as any)[mediaType]
-	// check if cacheable + generate cache key
+	delete uploadData[mediaType]
+
 	const cacheableKey =
 		typeof uploadData.media === 'object' &&
 		'url' in uploadData.media &&
@@ -153,7 +154,7 @@ export const prepareWAMessageMedia = async (
 			const obj = WAProto.Message.decode(mediaBuff)
 			const key = `${mediaType}Message`
 
-			Object.assign(obj[key as keyof proto.Message]!, { ...uploadData, media: undefined })
+			Object.assign(obj[key], { ...uploadData, media: undefined })
 
 			return obj
 		}
@@ -178,8 +179,7 @@ export const prepareWAMessageMedia = async (
 		await fs.unlink(filePath)
 
 		const obj = WAProto.Message.fromObject({
-			// todo: add more support here
-			[`${mediaType}Message`]: (MessageTypeProto as any)[mediaType].fromObject({
+			[`${mediaType}Message`]: MessageTypeProto[mediaType].fromObject({
 				url: mediaUrl,
 				directPath,
 				fileSha256,
@@ -262,7 +262,7 @@ export const prepareWAMessageMedia = async (
 					logger?.debug('computed backgroundColor audio status')
 				}
 			} catch (error) {
-				logger?.warn({ trace: (error as any).stack }, 'failed to obtain extra info')
+				logger?.warn({ trace: error.stack }, 'failed to obtain extra info')
 			}
 		})()
 	]).finally(async () => {
@@ -279,7 +279,7 @@ export const prepareWAMessageMedia = async (
 	})
 
 	const obj = WAProto.Message.fromObject({
-		[`${mediaType}Message`]: MessageTypeProto[mediaType as keyof typeof MessageTypeProto].fromObject({
+		[`${mediaType}Message`]: MessageTypeProto[mediaType].fromObject({
 			url: mediaUrl,
 			directPath,
 			mediaKey,
@@ -335,9 +335,9 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 	content = normalizeMessageContent(content)
 	content = proto.Message.decode(proto.Message.encode(content!).finish())
 
-	let key = Object.keys(content)[0] as keyof proto.IMessage
+	let key = Object.keys(content)[0] as MessageType
 
-	let score = (content?.[key] as { contextInfo: proto.IContextInfo })?.contextInfo?.forwardingScore || 0
+	let score = content[key].contextInfo?.forwardingScore || 0
 	score += message.key.fromMe && !forceForward ? 0 : 1
 	if (key === 'conversation') {
 		content.extendedTextMessage = { text: content[key] }
@@ -346,11 +346,10 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 		key = 'extendedTextMessage'
 	}
 
-	const key_ = content?.[key] as { contextInfo: proto.IContextInfo }
 	if (score > 0) {
-		key_.contextInfo = { forwardingScore: score, isForwarded: true }
+		content[key].contextInfo = { forwardingScore: score, isForwarded: true }
 	} else {
-		key_.contextInfo = {}
+		content[key].contextInfo = {}
 	}
 
 	return content
@@ -404,7 +403,7 @@ export const generateWAMessageContent = async (
 		}
 
 		if (contactLen === 1) {
-			m.contactMessage = WAProto.Message.ContactMessage.fromObject(message.contacts.contacts[0]!)
+			m.contactMessage = WAProto.Message.ContactMessage.fromObject(message.contacts.contacts[0])
 		} else {
 			m.contactsArrayMessage = WAProto.Message.ContactsArrayMessage.fromObject(message.contacts)
 		}
@@ -542,15 +541,9 @@ export const generateWAMessageContent = async (
 	}
 
 	if ('mentions' in message && message.mentions?.length) {
-		const messageType = Object.keys(m)[0]! as Extract<keyof proto.IMessage, MessageWithContextInfo>
-		const key = m[messageType]
-		if ('contextInfo' in key! && !!key.contextInfo) {
-			key.contextInfo.mentionedJid = message.mentions
-		} else if (key!) {
-			key.contextInfo = {
-				mentionedJid: message.mentions
-			}
-		}
+		const [messageType] = Object.keys(m)
+		m[messageType].contextInfo = m[messageType] || {}
+		m[messageType].contextInfo.mentionedJid = message.mentions
 	}
 
 	if ('edit' in message) {
@@ -565,13 +558,9 @@ export const generateWAMessageContent = async (
 	}
 
 	if ('contextInfo' in message && !!message.contextInfo) {
-		const messageType = Object.keys(m)[0]! as Extract<keyof proto.IMessage, MessageWithContextInfo>
-		const key = m[messageType]
-		if ('contextInfo' in key! && !!key.contextInfo) {
-			key.contextInfo = { ...key.contextInfo, ...message.contextInfo }
-		} else if (key!) {
-			key.contextInfo = message.contextInfo
-		}
+		const [messageType] = Object.keys(m)
+		m[messageType] = m[messageType] || {}
+		m[messageType].contextInfo = message.contextInfo
 	}
 
 	return WAProto.Message.fromObject(m)
@@ -589,7 +578,7 @@ export const generateWAMessageFromContent = (
 	}
 
 	const innerMessage = normalizeMessageContent(message)!
-	const key = getContentType(innerMessage)! as Exclude<keyof proto.IMessage, 'conversation'>
+	const key: string = getContentType(innerMessage)!
 	const timestamp = unixTimestampSeconds(options.timestamp)
 	const { quoted, userJid } = options
 
@@ -608,8 +597,7 @@ export const generateWAMessageFromContent = (
 			delete quotedContent.contextInfo
 		}
 
-		const contextInfo: proto.IContextInfo =
-			('contextInfo' in innerMessage[key]! && innerMessage[key]?.contextInfo) || {}
+		const contextInfo: proto.IContextInfo = innerMessage[key].contextInfo || {}
 		contextInfo.participant = jidNormalizedUser(participant!)
 		contextInfo.stanzaId = quoted.key.id
 		contextInfo.quotedMessage = quotedMsg
@@ -620,10 +608,7 @@ export const generateWAMessageFromContent = (
 			contextInfo.remoteJid = quoted.key.remoteJid
 		}
 
-		if (contextInfo && innerMessage[key]) {
-			/* @ts-ignore */
-			innerMessage[key].contextInfo = contextInfo
-		}
+		innerMessage[key].contextInfo = contextInfo
 	}
 
 	if (
@@ -636,9 +621,8 @@ export const generateWAMessageFromContent = (
 		// newsletters don't support ephemeral messages
 		!isJidNewsletter(jid)
 	) {
-		/* @ts-ignore */
 		innerMessage[key].contextInfo = {
-			...((innerMessage[key] as any).contextInfo || {}),
+			...(innerMessage[key].contextInfo || {}),
 			expiration: options.ephemeralExpiration || WA_DEFAULT_EPHEMERAL
 			//ephemeralSettingTimestamp: options.ephemeralOptions.eph_setting_ts?.toString()
 		}
@@ -669,7 +653,7 @@ export const generateWAMessage = async (jid: string, content: AnyMessageContent,
 }
 
 /** Get the key to access the true type of content */
-export const getContentType = (content: proto.IMessage | undefined) => {
+export const getContentType = (content: WAProto.IMessage | undefined) => {
 	if (content) {
 		const keys = Object.keys(content)
 		const key = keys.find(k => (k === 'conversation' || k.includes('Message')) && k !== 'senderKeyDistributionMessage')
@@ -853,7 +837,7 @@ export function getAggregateVotesInPollMessage(
 				data = voteHashMap[hash]
 			}
 
-			voteHashMap[hash]!.voters.push(getKeyAuthor(update.pollUpdateMessageKey, meId))
+			voteHashMap[hash].voters.push(getKeyAuthor(update.pollUpdateMessageKey, meId))
 		}
 	}
 

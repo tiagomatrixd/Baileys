@@ -1,9 +1,9 @@
 import { Boom } from '@hapi/boom'
 import { createHash } from 'crypto'
-import { proto } from '../../WAProto/index.js'
+import { proto } from '../../WAProto'
 import { KEY_BUNDLE_TYPE } from '../Defaults'
 import type { AuthenticationCreds, SignalCreds, SocketConfig } from '../Types'
-import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '../WABinary'
+import { BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '../WABinary'
 import { Curve, hmacSign } from './crypto'
 import { encodeBigEndian } from './generics'
 import { createSignalIdentity } from './signal'
@@ -34,8 +34,8 @@ const PLATFORM_MAP = {
 
 const getWebInfo = (config: SocketConfig): proto.ClientPayload.IWebInfo => {
 	let webSubPlatform = proto.ClientPayload.WebInfo.WebSubPlatform.WEB_BROWSER
-	if (config.syncFullHistory && PLATFORM_MAP[config.browser[0] as keyof typeof PLATFORM_MAP]) {
-		webSubPlatform = PLATFORM_MAP[config.browser[0] as keyof typeof PLATFORM_MAP]
+	if (config.syncFullHistory && PLATFORM_MAP[config.browser[0]]) {
+		webSubPlatform = PLATFORM_MAP[config.browser[0]]
 	}
 
 	return { webSubPlatform }
@@ -67,10 +67,7 @@ export const generateLoginNode = (userJid: string, config: SocketConfig): proto.
 
 const getPlatformType = (platform: string): proto.DeviceProps.PlatformType => {
 	const platformType = platform.toUpperCase()
-	return (
-		proto.DeviceProps.PlatformType[platformType as keyof typeof proto.DeviceProps.PlatformType] ||
-		proto.DeviceProps.PlatformType.DESKTOP
-	)
+	return proto.DeviceProps.PlatformType[platformType] || proto.DeviceProps.PlatformType.DESKTOP
 }
 
 export const generateRegistrationNode = (
@@ -154,7 +151,7 @@ export const configureSuccessfulPairing = (
 	const deviceMsg = Buffer.concat([devicePrefix, deviceDetails!, signedIdentityKey.public, accountSignatureKey!])
 	account.deviceSignature = Curve.sign(signedIdentityKey.private, deviceMsg)
 
-	const identity = createSignalIdentity(jid!, accountSignatureKey!)
+	const identity = createSignalIdentity(jid, accountSignatureKey!)
 	const accountEnc = encodeSignedDeviceIdentity(account, false)
 
 	const deviceIdentity = proto.ADVDeviceIdentity.decode(account.details!)
@@ -164,7 +161,7 @@ export const configureSuccessfulPairing = (
 		attrs: {
 			to: S_WHATSAPP_NET,
 			type: 'result',
-			id: msgId!
+			id: msgId
 		},
 		content: [
 			{
@@ -183,7 +180,7 @@ export const configureSuccessfulPairing = (
 
 	const authUpdate: Partial<AuthenticationCreds> = {
 		account,
-		me: { id: jid!, name: bizName },
+		me: { id: jid, name: bizName },
 		signalIdentities: [...(signalIdentities || []), identity],
 		platform: platformNode?.attrs.name
 	}

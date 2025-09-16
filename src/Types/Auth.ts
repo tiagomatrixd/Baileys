@@ -1,4 +1,4 @@
-import type { proto } from '../../WAProto/index.js'
+import type { proto } from '../../WAProto'
 import type { Contact } from './Contact'
 import type { MinimalMessage } from './Message'
 

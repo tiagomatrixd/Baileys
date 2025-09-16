@@ -1,4 +1,4 @@
-import type { GetCatalogOptions, ProductCreate, ProductUpdate, SocketConfig } from '../Types'
+import { GetCatalogOptions, ProductCreate, ProductUpdate, SocketConfig } from '../Types'
 import {
 	parseCatalogNode,
 	parseCollectionsNode,
@@ -7,7 +7,7 @@ import {
 	toProductNode,
 	uploadingNecessaryImagesOfProduct
 } from '../Utils/business'
-import { type BinaryNode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
+import { BinaryNode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
 import { getBinaryNodeChild } from '../WABinary/generic-utils'
 import { makeMessagesRecvSocket } from './messages-recv'
 

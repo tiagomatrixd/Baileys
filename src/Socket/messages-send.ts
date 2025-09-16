@@ -1,8 +1,8 @@
 import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
-import { proto } from '../../WAProto/index.js'
+import { proto } from '../../WAProto'
 import { DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
-import type {
+import {
 	AnyMessageContent,
 	MediaConnInfo,
 	MessageReceiptType,
@@ -33,8 +33,8 @@ import {
 import { getUrlInfo } from '../Utils/link-preview'
 import {
 	areJidsSameUser,
-	type BinaryNode,
-	type BinaryNodeAttributes,
+	BinaryNode,
+	BinaryNodeAttributes,
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
 	isJidGroup,
@@ -42,13 +42,12 @@ import {
 	jidDecode,
 	jidEncode,
 	jidNormalizedUser,
-	type JidWithDevice,
+	JidWithDevice,
 	S_WHATSAPP_NET
 } from '../WABinary'
 import { USyncQuery, USyncUser } from '../WAUSync'
 import { makeGroupsSocket } from './groups'
-import type { NewsletterSocket } from './newsletter'
-import { makeNewsletterSocket } from './newsletter'
+import { makeNewsletterSocket, NewsletterSocket } from './newsletter'
 
 export const makeMessagesSocket = (config: SocketConfig) => {
 	const {
@@ -75,7 +74,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 	const userDevicesCache =
 		config.userDevicesCache ||
-		new NodeCache<JidWithDevice[]>({
+		new NodeCache({
 			stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, // 5 minutes
 			useClones: false
 		})
@@ -94,14 +93,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					},
 					content: [{ tag: 'media_conn', attrs: {} }]
 				})
-				const mediaConnNode = getBinaryNodeChild(result, 'media_conn')!
+				const mediaConnNode = getBinaryNodeChild(result, 'media_conn')
 				const node: MediaConnInfo = {
 					hosts: getBinaryNodeChildren(mediaConnNode, 'host').map(({ attrs }) => ({
-						hostname: attrs.hostname!,
-						maxContentLengthBytes: +attrs.maxContentLengthBytes!
+						hostname: attrs.hostname,
+						maxContentLengthBytes: +attrs.maxContentLengthBytes
 					})),
-					auth: mediaConnNode.attrs.auth!,
-					ttl: +mediaConnNode.attrs.ttl!,
+					auth: mediaConnNode!.attrs.auth,
+					ttl: +mediaConnNode!.attrs.ttl,
 					fetchDate: new Date()
 				}
 				logger.debug('fetched media conn')
@@ -122,14 +121,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		messageIds: string[],
 		type: MessageReceiptType
 	) => {
-		if (!messageIds || messageIds.length === 0) {
-			throw new Boom('missing ids in receipt')
-		}
-
 		const node: BinaryNode = {
 			tag: 'receipt',
 			attrs: {
-				id: messageIds[0]!
+				id: messageIds[0]
 			}
 		}
 		const isReadReceipt = type === 'read' || type === 'read-self'
@@ -231,13 +226,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			for (const item of extracted) {
 				deviceMap[item.user] = deviceMap[item.user] || []
-				deviceMap[item.user]?.push(item)
+				deviceMap[item.user].push(item)
 
 				deviceResults.push(item)
 			}
 
 			for (const key in deviceMap) {
-				userDevicesCache.set(key, deviceMap[key]!)
+				userDevicesCache.set(key, deviceMap[key])
 			}
 		}
 
@@ -308,7 +303,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const msgId = await relayMessage(meJid, protocolMessage, {
 			additionalAttributes: {
 				category: 'peer',
-
+				// eslint-disable-next-line camelcase
 				push_priority: 'high_force'
 			}
 		})
@@ -399,7 +394,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			messageContextInfo: message.messageContextInfo
 		}
 
-		const extraAttrs: BinaryNodeAttributes = {}
+		const extraAttrs = {}
 
 		if (participant) {
 			// when the retry request is not for a group
@@ -461,23 +456,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					})(),
 					(async () => {
 						if (!participant && !isStatus) {
-							try {
-								const result = await authState.keys.get('sender-key-memory', [jid])
-								const memory = result[jid] || {}
-								
-								// Validate and clean the memory entries
-								const cleanedMemory: { [jid: string]: boolean } = {}
-								for (const [key, value] of Object.entries(memory)) {
-									if (typeof value === 'boolean' && value === true) {
-										cleanedMemory[key] = value
-									}
-								}
-								
-								return cleanedMemory
-							} catch (error) {
-								logger.warn({ error, jid }, 'failed to load sender key memory, starting fresh')
-								return {}
-							}
+							const result = await authState.keys.get('sender-key-memory', [jid])
+							return result[jid] || {}
 						}
 
 						return {}
@@ -552,21 +532,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					content: ciphertext
 				})
 
-				// Store sender key memory with validation and cleanup
-				try {
-					// Clean up invalid entries in sender key memory
-					const cleanedSenderKeyMap: { [jid: string]: boolean } = {}
-					for (const [jidKey, value] of Object.entries(senderKeyMap)) {
-						if (typeof value === 'boolean' && value === true) {
-							cleanedSenderKeyMap[jidKey] = value
-						}
-					}
-					
-					await authState.keys.set({ 'sender-key-memory': { [jid]: cleanedSenderKeyMap } })
-				} catch (error) {
-					logger.warn({ error, jid }, 'failed to store sender key memory, will retry on next message')
-					// Don't fail the message send if we can't store the memory
-				}
+				await authState.keys.set({ 'sender-key-memory': { [jid]: senderKeyMap } })
 			} else {
 				const { user: meUser } = jidDecode(meId)!
 
@@ -796,7 +762,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 								content.url = getUrlFromDirectPath(content.directPath!)
 
 								logger.debug({ directPath: media.directPath, key: result.key }, 'media update successful')
-							} catch (err: any) {
+							} catch (err) {
 								error = err
 							}
 						}

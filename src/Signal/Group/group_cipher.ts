@@ -1,4 +1,3 @@
-/* @ts-ignore */
 import { decrypt, encrypt } from 'libsignal/src/crypto'
 import queueJob from './queue-job'
 import { SenderKeyMessage } from './sender-key-message'
@@ -36,17 +35,8 @@ export class GroupCipher {
 				throw new Error('No session to encrypt message')
 			}
 
-			let iteration: number
-			try {
-				const chainKey = senderKeyState.getSenderChainKey()
-				iteration = chainKey.getIteration()
-				// Use current iteration for first message, otherwise increment
-				iteration = iteration === 0 ? 0 : iteration + 1
-			} catch (error) {
-				throw new Error('Invalid sender chain key state')
-			}
-
-			const senderKey = this.getSenderKey(senderKeyState, iteration)
+			const iteration = senderKeyState.getSenderChainKey().getIteration()
+			const senderKey = this.getSenderKey(senderKeyState, iteration === 0 ? 0 : iteration + 1)
 
 			const ciphertext = await this.getCipherText(senderKey.getIv(), senderKey.getCipherKey(), paddedPlaintext)
 
@@ -69,24 +59,13 @@ export class GroupCipher {
 				throw new Error('No SenderKeyRecord found for decryption')
 			}
 
-			let senderKeyMessage: SenderKeyMessage
-			try {
-				senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes)
-			} catch (error) {
-				throw new Error('Invalid sender key message format')
-			}
-
+			const senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes)
 			const senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId())
 			if (!senderKeyState) {
 				throw new Error('No session found to decrypt message')
 			}
 
-			try {
-				senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic())
-			} catch (error) {
-				throw new Error('Invalid message signature')
-			}
-
+			senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic())
 			const senderKey = this.getSenderKey(senderKeyState, senderKeyMessage.getIteration())
 
 			const plaintext = await this.getPlainText(

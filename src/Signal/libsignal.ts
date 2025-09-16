@@ -1,7 +1,6 @@
-/* @ts-ignore */
 import * as libsignal from 'libsignal'
-import type { SignalAuthState } from '../Types'
-import type { SignalRepository } from '../Types/Signal'
+import { SignalAuthState } from '../Types'
+import { SignalRepository } from '../Types/Signal'
 import { generateSignalPubKey } from '../Utils'
 import { jidDecode } from '../WABinary'
 import type { SenderKeyStore } from './Group/group_cipher'
@@ -33,32 +32,13 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				null,
 				item.axolotlSenderKeyDistributionMessage
 			)
-			
-			try {
-				const senderNameStr = senderName.toString()
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-				
-				// Always load/create sender key record
-				let senderKeyRecord: SenderKeyRecord
-				if (!senderKey) {
-					senderKeyRecord = new SenderKeyRecord()
-					await storage.storeSenderKey(senderName, senderKeyRecord)
-				} else {
-					senderKeyRecord = await storage.loadSenderKey(senderName)
-					
-					// Validate existing sender key record
-					if (senderKeyRecord.isEmpty()) {
-						senderKeyRecord = new SenderKeyRecord()
-					}
-				}
-
-				await builder.process(senderName, senderMsg)
-			} catch (error) {
-				// If processing fails, create a new record and try again
-				const newSenderKeyRecord = new SenderKeyRecord()
-				await storage.storeSenderKey(senderName, newSenderKeyRecord)
-				await builder.process(senderName, senderMsg)
+			const senderNameStr = senderName.toString()
+			const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
+			if (!senderKey) {
+				await storage.storeSenderKey(senderName, new SenderKeyRecord())
 			}
+
+			await builder.process(senderName, senderMsg)
 		},
 		async decryptMessage({ jid, type, ciphertext }) {
 			const addr = jidToSignalProtocolAddress(jid)
@@ -90,46 +70,18 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			const builder = new GroupSessionBuilder(storage)
 
 			const senderNameStr = senderName.toString()
-			
-			try {
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-				
-				// Always ensure we have a valid sender key record
-				let senderKeyRecord: SenderKeyRecord
-				if (!senderKey) {
-					senderKeyRecord = new SenderKeyRecord()
-					await storage.storeSenderKey(senderName, senderKeyRecord)
-				} else {
-					senderKeyRecord = await storage.loadSenderKey(senderName)
-					
-					// Validate the sender key record
-					if (senderKeyRecord.isEmpty()) {
-						senderKeyRecord = new SenderKeyRecord()
-						await storage.storeSenderKey(senderName, senderKeyRecord)
-					}
-				}
+			const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
+			if (!senderKey) {
+				await storage.storeSenderKey(senderName, new SenderKeyRecord())
+			}
 
-				const senderKeyDistributionMessage = await builder.create(senderName)
-				const session = new GroupCipher(storage, senderName)
-				const ciphertext = await session.encrypt(data)
+			const senderKeyDistributionMessage = await builder.create(senderName)
+			const session = new GroupCipher(storage, senderName)
+			const ciphertext = await session.encrypt(data)
 
-				return {
-					ciphertext,
-					senderKeyDistributionMessage: senderKeyDistributionMessage.serialize()
-				}
-			} catch (error) {
-				// If encryption fails, recreate the sender key and try again
-				const newSenderKeyRecord = new SenderKeyRecord()
-				await storage.storeSenderKey(senderName, newSenderKeyRecord)
-				
-				const senderKeyDistributionMessage = await builder.create(senderName)
-				const session = new GroupCipher(storage, senderName)
-				const ciphertext = await session.encrypt(data)
-
-				return {
-					ciphertext,
-					senderKeyDistributionMessage: senderKeyDistributionMessage.serialize()
-				}
+			return {
+				ciphertext,
+				senderKeyDistributionMessage: senderKeyDistributionMessage.serialize()
 			}
 		},
 		async injectE2ESession({ jid, session }) {
@@ -159,8 +111,7 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 				return libsignal.SessionRecord.deserialize(sess)
 			}
 		},
-		// TODO: Replace with libsignal.SessionRecord when type exports are added to libsignal
-		storeSession: async (id: string, session: any) => {
+		storeSession: async (id: string, session: libsignal.SessionRecord) => {
 			await keys.set({ session: { [id]: session.serialize() } })
 		},
 		isTrustedIdentity: () => {

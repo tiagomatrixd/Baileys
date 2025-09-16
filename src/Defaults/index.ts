@@ -1,10 +1,9 @@
-import { proto } from '../../WAProto/index.js'
+import { proto } from '../../WAProto'
 import { makeLibSignalRepository } from '../Signal/libsignal'
 import type { AuthenticationState, MediaType, SocketConfig, WAVersion } from '../Types'
 import { Browsers } from '../Utils'
 import logger from '../Utils/logger'
-// @ts-ignore - This file is generated during build
-import { version } from './baileys-version.js'
+import { version } from './baileys-version.json'
 
 export const UNAUTHORIZED_CODES = [401, 403, 419]
 

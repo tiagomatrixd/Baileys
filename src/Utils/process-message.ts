@@ -1,6 +1,6 @@
-import type { AxiosRequestConfig } from 'axios'
-import { proto } from '../../WAProto/index.js'
-import type {
+import { AxiosRequestConfig } from 'axios'
+import { proto } from '../../WAProto'
+import {
 	AuthenticationCreds,
 	BaileysEventEmitter,
 	CacheStore,
@@ -9,15 +9,15 @@ import type {
 	ParticipantAction,
 	RequestJoinAction,
 	RequestJoinMethod,
-	SignalKeyStoreWithTransaction
+	SignalKeyStoreWithTransaction,
+	WAMessageStubType
 } from '../Types'
-import { WAMessageStubType } from '../Types'
 import { getContentType, normalizeMessageContent } from '../Utils/messages'
 import { areJidsSameUser, isJidBroadcast, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
 import { aesDecryptGCM, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import { downloadAndProcessHistorySyncNotification } from './history'
-import type { ILogger } from './logger'
+import { ILogger } from './logger'
 
 type ProcessMessageContext = {
 	shouldProcessHistoryMsg: boolean
@@ -273,7 +273,6 @@ const processMessage = async (
 					}
 				}
 
-				break
 			case proto.Message.ProtocolMessage.Type.MESSAGE_EDIT:
 				ev.emit('messages.update', [
 					{

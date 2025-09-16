@@ -1,16 +1,13 @@
-import { Boom } from '@hapi/boom'
-import type { Contact } from './Contact'
+import { Contact } from './Contact'
 
 export type WAConnectionState = 'open' | 'connecting' | 'close'
 
 export type ConnectionState = {
 	/** connection is now open, connecting or closed */
 	connection: WAConnectionState
-
 	/** the error that caused the connection to close */
 	lastDisconnect?: {
-		// TODO: refactor and gain independence from Boom
-		error: Boom | Error | undefined
+		error: Error | undefined
 		date: Date
 	}
 	/** is this a new login */
