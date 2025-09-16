@@ -126,7 +126,8 @@ export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: Si
 
 export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean, mylid?:string) => {
 	const { user: myUser, device: myDevice } = jidDecode(myJid)!
-	const { user: mylidUser, device: melidDevice } = jidDecode(mylid)!
+	const mylidDecoded = mylid ? jidDecode(mylid) : null
+	const { user: mylidUser, device: melidDevice } = mylidDecoded || { user: null, device: null }
 
 	const extracted: JidWithDevice[] = []
 
@@ -139,7 +140,7 @@ export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string,
 				if (
 					(!excludeZeroDevices || device !== 0) && // if zero devices are not-excluded, or device is non zero
 					(myUser !== user || myDevice !== device) && // either different user or if me user, not this device
-					(mylidUser !== user || melidDevice !== device) &&
+					(mylidUser === null || mylidUser !== user || melidDevice !== device) &&
 					(device === 0 || !!keyIndex) // ensure that "key-index" is specified for "non-zero" devices, produces a bad req otherwise
 				) {
 					extracted.push({ user, device })
