@@ -23,6 +23,7 @@ import {
 import { DeviceListData, ParsedDeviceInfo, USyncQueryResultList } from '../WAUSync'
 import { Curve, generateSignalPubKey } from './crypto'
 import { encodeBigEndian } from './generics'
+import { convertlidDevice} from '../Utils'
 
 export const createSignalIdentity = (wid: string, accountSignatureKey: Uint8Array): SignalIdentity => {
 	return {
@@ -77,7 +78,7 @@ export const xmppPreKey = (pair: KeyPair, id: number): BinaryNode => ({
 	]
 })
 
-export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: SignalRepository) => {
+export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: SignalRepository, lid?: string | null | undefined, meid?: string, melid?:string) => {
 	const extractKey = (key: BinaryNode) =>
 		key
 			? {
@@ -105,10 +106,11 @@ export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: Si
 				const key = getBinaryNodeChild(node, 'key')!
 				const identity = getBinaryNodeChildBuffer(node, 'identity')!
 				const jid = node.attrs.jid
-				const registrationId = getBinaryNodeChildUInt(node, 'registration', 4)
+				const registrationId = getBinaryNodeChildUInt(node, 'registration', 4);
+				const newlid = convertlidDevice(jid, lid, meid, melid)
 
 				await repository.injectE2ESession({
-					jid,
+					jid: newlid,
 					session: {
 						registrationId: registrationId!,
 						identityKey: generateSignalPubKey(identity),
@@ -121,8 +123,10 @@ export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: Si
 	}
 }
 
-export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean) => {
+
+export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean, mylid?:string) => {
 	const { user: myUser, device: myDevice } = jidDecode(myJid)!
+	const { user: mylidUser, device: melidDevice } = jidDecode(mylid)!
 
 	const extracted: JidWithDevice[] = []
 
@@ -135,6 +139,7 @@ export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string,
 				if (
 					(!excludeZeroDevices || device !== 0) && // if zero devices are not-excluded, or device is non zero
 					(myUser !== user || myDevice !== device) && // either different user or if me user, not this device
+					(mylidUser !== user || melidDevice !== device) &&
 					(device === 0 || !!keyIndex) // ensure that "key-index" is specified for "non-zero" devices, produces a bad req otherwise
 				) {
 					extracted.push({ user, device })
@@ -145,6 +150,7 @@ export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string,
 
 	return extracted
 }
+
 
 /**
  * get the next N keys for upload or processing
