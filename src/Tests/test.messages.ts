@@ -2,8 +2,9 @@ import { WAMessageContent } from '../Types'
 import { normalizeMessageContent } from '../Utils'
 
 describe('Messages Tests', () => {
+
 	it('should correctly unwrap messages', () => {
-		const CONTENT = { imageMessage: {} }
+		const CONTENT = { imageMessage: { } }
 		expectRightContent(CONTENT)
 		expectRightContent({
 			ephemeralMessage: { message: CONTENT }
@@ -28,7 +29,9 @@ describe('Messages Tests', () => {
 		})
 
 		function expectRightContent(content: WAMessageContent) {
-			expect(normalizeMessageContent(content)).toHaveProperty('imageMessage')
+			expect(
+				normalizeMessageContent(content)
+			).toHaveProperty('imageMessage')
 		}
 	})
 })
