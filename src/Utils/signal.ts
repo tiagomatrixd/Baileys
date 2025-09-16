@@ -6,7 +6,6 @@ import { assertNodeErrorFree, BinaryNode, getBinaryNodeChild, getBinaryNodeChild
 import { DeviceListData, ParsedDeviceInfo, USyncQueryResultList } from '../WAUSync'
 import { Curve, generateSignalPubKey } from './crypto'
 import { encodeBigEndian } from './generics'
-import {convertlidDevice} from './messages'
 
 export const createSignalIdentity = (
 	wid: string,
@@ -68,17 +67,19 @@ export const xmppPreKey = (pair: KeyPair, id: number): BinaryNode => (
 	}
 )
 
-export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: SignalRepository, lid?: string | null | undefined, meid?: string, melid?:string) => {
-	const extractKey = (key: BinaryNode) =>
-		key
-			? {
-					keyId: getBinaryNodeChildUInt(key, 'id', 3)!,
-					publicKey: generateSignalPubKey(getBinaryNodeChildBuffer(key, 'value')!),
-					signature: getBinaryNodeChildBuffer(key, 'signature')!
-				}
-			: undefined
+export const parseAndInjectE2ESessions = async(
+	node: BinaryNode,
+	repository: SignalRepository
+) => {
+	const extractKey = (key: BinaryNode) => (
+		key ? ({
+			keyId: getBinaryNodeChildUInt(key, 'id', 3)!,
+			publicKey: generateSignalPubKey(getBinaryNodeChildBuffer(key, 'value')!),
+			signature: getBinaryNodeChildBuffer(key, 'signature')!,
+		}) : undefined
+	)
 	const nodes = getBinaryNodeChildren(getBinaryNodeChild(node, 'list'), 'user')
-	for (const node of nodes) {
+	for(const node of nodes) {
 		assertNodeErrorFree(node)
 	}
 
@@ -89,49 +90,49 @@ export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: Si
 	// It's rare case when you need to E2E sessions for so many users, but it's possible
 	const chunkSize = 100
 	const chunks = chunk(nodes, chunkSize)
-	for (const nodesChunk of chunks) {
+	for(const nodesChunk of chunks) {
 		await Promise.all(
-			nodesChunk.map(async node => {
-				const signedKey = getBinaryNodeChild(node, 'skey')!
-				const key = getBinaryNodeChild(node, 'key')!
-				const identity = getBinaryNodeChildBuffer(node, 'identity')!
-				const jid = node.attrs.jid
-				const registrationId = getBinaryNodeChildUInt(node, 'registration', 4);
-				const newlid = convertlidDevice(jid, lid, meid, melid)
+			nodesChunk.map(
+				async node => {
+					const signedKey = getBinaryNodeChild(node, 'skey')!
+					const key = getBinaryNodeChild(node, 'key')!
+					const identity = getBinaryNodeChildBuffer(node, 'identity')!
+					const jid = node.attrs.jid
+					const registrationId = getBinaryNodeChildUInt(node, 'registration', 4)
 
-				await repository.injectE2ESession({
-					jid: newlid,
-					session: {
-						registrationId: registrationId!,
-						identityKey: generateSignalPubKey(identity),
-						signedPreKey: extractKey(signedKey)!,
-						preKey: extractKey(key)!
-					}
-				})
-			})
+					await repository.injectE2ESession({
+						jid,
+						session: {
+							registrationId: registrationId!,
+							identityKey: generateSignalPubKey(identity),
+							signedPreKey: extractKey(signedKey)!,
+							preKey: extractKey(key)!
+						}
+					})
+				}
+			)
 		)
 	}
 }
 
-export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean, mylid?:string) => {
+export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean) => {
 	const { user: myUser, device: myDevice } = jidDecode(myJid)!
-	const { user: mylidUser, device: melidDevice } = jidDecode(mylid)!
 
 	const extracted: JidWithDevice[] = []
 
-	for (const userResult of result) {
-		const { devices, id } = userResult as { devices: ParsedDeviceInfo; id: string }
+
+	for(const userResult of result) {
+		const { devices, id } = userResult as { devices: ParsedDeviceInfo, id: string }
 		const { user } = jidDecode(id)!
 		const deviceList = devices?.deviceList as DeviceListData[]
-		if (Array.isArray(deviceList)) {
-			for (const { id: device, keyIndex } of deviceList) {
-				if (
+		if(Array.isArray(deviceList)) {
+			for(const { id: device, keyIndex } of deviceList) {
+				if(
 					(!excludeZeroDevices || device !== 0) && // if zero devices are not-excluded, or device is non zero
 					(myUser !== user || myDevice !== device) && // either different user or if me user, not this device
-					(mylidUser !== user || melidDevice !== device) &&
 					(device === 0 || !!keyIndex) // ensure that "key-index" is specified for "non-zero" devices, produces a bad req otherwise
 				) {
-					extracted.push({ user, device, jid:userResult.id })
+					extracted.push({ user, device })
 				}
 			}
 		}

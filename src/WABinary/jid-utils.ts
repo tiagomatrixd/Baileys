@@ -10,7 +10,6 @@ export type JidServer = 'c.us' | 'g.us' | 'broadcast' | 's.whatsapp.net' | 'call
 export type JidWithDevice = {
     user: string
     device?: number
-	jid?: string
 }
 
 export type FullJid = JidWithDevice & {
